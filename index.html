@@ -31,6 +31,9 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding-bloc
 .brand .sess{font-family:var(--sc);color:var(--mute);letter-spacing:.08em;font-size:13px;display:flex;align-items:center;gap:6px}
 .brand .sess input{width:4.2em;background:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 6px;text-align:center;font-variant-numeric:tabular-nums}
 body.ro .tok.mv{cursor:grab}
+.pnwrap .lbl span:first-child{color:var(--soul)}
+textarea.pnote{border-color:#2f4a5c;background:#0c141b}
+textarea.pnote:focus{border-color:var(--soul)}
 .role{font-family:var(--sc);font-size:12px;letter-spacing:.1em;padding:2px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mute)}
 .role.live{color:var(--infect);border-color:#f08a3c66}
 .role.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--infect);margin-right:6px;vertical-align:1px;animation:pulse 2s infinite}
@@ -302,7 +305,7 @@ const KINDS = {
 const STATUS = {vivant:"Vivant", mort:"Mort", inconnu:"Inconnu", allie:"Allié", hostile:"Hostile"};
 
 // ---------- État ----------
-const S = {zones:{}, entities:{}, tokens:{}, meta:{}, world:{}, opened:{}, known:{}, hid:{}, images:{}, moves:{}, passages:true, sel:null, selTok:null, tab:"zone",
+const S = {zones:{}, entities:{}, tokens:{}, meta:{}, world:{}, opened:{}, known:{}, hid:{}, images:{}, moves:{}, pnotes:{}, passages:true, sel:null, selTok:null, tab:"zone",
   player:false, labels:true, filterZone:"", filterKind:"", filterQ:""};
 let db=null, assets=null, user=null, BASE="";
 S.role="gm";           // "gm" (propriétaire) ou "player" (tous les autres, lecture seule)
@@ -556,9 +559,11 @@ function paneZone(p){
       <div><div class="lbl">Connaissance du groupe <span style="font-variant-numeric:tabular-nums;letter-spacing:.02em">${S.player?`${counts[3]} découvertes · ${counts[2]} visitées`:LEVELS.slice(1).map(l=>`${counts[l.k]} ${l.label.toLowerCase()}${counts[l.k]>1?"s":""}`).join(" · ")}</span></div>
       <div class="list">${shown.map(z=>{const L=lvl(z.id);const n=Object.values(S.entities).filter(e=>e.zone===z.id).length;
         return `<button type="button" class="li" data-goto="${z.id}" style="text-align:left;cursor:pointer"><span class="swatch" style="background:${z.color}"></span><span style="flex:1">${esc(zn(z.id))}</span><small style="color:var(--faint)">${n&&!S.player?n+" fiche"+(n>1?"s":""):""}</small><span class="chip" style="color:${LEVELS[L].color}">${LEVELS[L].label}</span></button>`}).join("")}</div></div>
+      ${noteBlock("g_general","Carnet du groupe",6)}
       ${RO()?"":`<div><div class="lbl">Notes de campagne <span class="saved" data-saved></span></div>
       <textarea id="campNotes" rows="6" placeholder="Fils rouges, promesses faites aux PNJ, retours de la réunion checkup…">${esc(S.meta.notes||"")}</textarea></div>`}`;
     p.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>selectZone(b.dataset.goto));
+    bindNotes(p);
     if(RO()) return;
     $("#wIntro").oninput=e=>{S.world.intro=e.target.value; save("meta/intro",{text:S.world.intro},800);};
     const wh=$("#wHist"); if(wh){ wh.oninput=e=>{S.world.history=e.target.value; save("meta/history",{text:S.world.history},800);}; $("#wHistD").ontoggle=e=>{S.histOpen=e.target.open;}; }
@@ -581,6 +586,7 @@ function paneZone(p){
     ${field("desc","Description (à lire aux joueurs)","Ce que les joueurs voient, entendent, sentent en arrivant…")}
     ${S.player&&lvl(z.id)<3?"":field("lore","Lore","Histoire de la zone, factions, ce qui s'y est passé…")}
     ${S.player?"":field("secrets","Secrets MJ","Pièges, trésors cachés, révélations à venir…","secret")}
+    ${noteBlock("z_"+z.id, RO()?"Nos notes":"Notes des joueurs")}
     <div><div class="lbl">Passages ${S.player?"":`<span class="saved">Estompés sur la carte = inconnus des joueurs</span>`}</div>
       <div class="plist">${PASSAGES.filter(p=>p.a===z.id||p.b===z.id).filter(p=>!S.player||pVisible(p)).map(p=>{
         const other=p.a===z.id?p.b:p.a, open=S.opened[p.id];
@@ -601,6 +607,7 @@ function paneZone(p){
   p.querySelectorAll("[data-pass]").forEach(b=>b.onclick=()=>togglePass(b.dataset.pass));
   p.querySelectorAll("[data-hid]").forEach(b=>b.onclick=()=>{const id=b.dataset.hid; S.hid[id]=!S.hid[id]; pSave(id); renderPassages(); paneZone(p);});
   p.querySelectorAll("[data-known]").forEach(b=>b.onclick=()=>{const id=b.dataset.known; S.known[id]=!S.known[id]; pSave(id); renderPassages(); paneZone(p);});
+  bindNotes(p);
   bindCards(p);
 }
 
@@ -689,7 +696,9 @@ function viewEntity(id){
         ${e.desc?`<div><div class="lbl">Description</div><p style="margin:0;line-height:1.5;white-space:pre-wrap">${esc(e.desc)}</p></div>`:""}
       </div>
     </div>
+    ${noteBlock("e_"+e.id,"Nos notes")}
     <div class="row" style="justify-content:flex-end"><button type="submit" class="btn">Fermer</button></div>`;
+  bindNotes(form);
   form.onsubmit=ev=>{ev.preventDefault(); dlg.close();};
   dlg.showModal();
 }
@@ -717,6 +726,7 @@ function openEntity(id,defaults={}){
     <div><div class="lbl">Description</div><textarea id="e_desc" rows="3" placeholder="Apparence, attitude, voix…">${esc(e.desc)}</textarea></div>
     <div><div class="lbl">Stats / capacités</div><textarea id="e_stats" rows="2" placeholder="PV, attaques, faiblesses…">${esc(e.stats)}</textarea></div>
     <div ${S.player?"hidden":""}><div class="lbl">Notes MJ</div><textarea id="e_notes" class="secret" rows="3" placeholder="Motivations, ce que le PNJ sait, interactions passées avec le groupe…">${esc(e.notes)}</textarea></div>
+    ${isNew?"":noteBlock("e_"+e.id,"Notes des joueurs",3)}
     <div class="row" style="justify-content:space-between">
       <div class="row">${isNew?"":`<button type="button" class="btn warn" id="e_del">Supprimer</button>`}</div>
       <div class="row">
@@ -725,6 +735,7 @@ function openEntity(id,defaults={}){
         <button type="submit" class="btn pri" value="save">Enregistrer</button>
       </div>
     </div>`;
+  bindNotes(form);
   const collect=()=>{
     e.name=$("#e_name").value.trim(); e.kind=$("#e_kind").value; e.status=$("#e_status").value;
     e.zone=$("#e_zone").value; e.desc=$("#e_desc").value; e.stats=$("#e_stats").value; e.notes=$("#e_notes").value;
@@ -737,7 +748,7 @@ function openEntity(id,defaults={}){
   const del=$("#e_del"); if(del) del.onclick=async()=>{
     if(del.dataset.confirm!=="1"){ del.dataset.confirm="1"; del.textContent="Confirmer la suppression"; return; }
     const imgId=e.imageId;
-    delete S.entities[e.id]; remove("entities/"+e.id);
+    delete S.entities[e.id]; remove("entities/"+e.id); db&&db.doc("pnotes/e_"+e.id).delete().catch(()=>{});
     Object.values(S.tokens).filter(t=>t.entityId===e.id).forEach(t=>delToken(t.id,true));
     if(imgId&&assets){ try{await assets.delete(imgId);}catch{} }
     dlg.close(); render();
@@ -771,8 +782,8 @@ q.addEventListener("input",()=>{
   const s=q.value.trim().toLowerCase();
   if(!s){res.hidden=true;return;}
   const hits=[];
-  for(const z of ZONES){ if(S.player&&lvl(z.id)<3) continue; const st=S.zones[z.id]||{}; const hay=[z.name,st.desc,st.lore,S.player?"":st.secrets,RO()?"":st.links].join(" ").toLowerCase(); if(hay.includes(s)) hits.push({t:"z",id:z.id,name:z.name,sub:"Zone",color:z.color});}
-  for(const e of Object.values(S.entities)){ if(S.player&&e.hiddenFromPlayers) continue; const hay=[e.name,e.desc,RO()?"":e.stats,S.player?"":e.notes].join(" ").toLowerCase(); if(hay.includes(s)) hits.push({t:"e",id:e.id,name:e.name,sub:(KINDS[e.kind]||KINDS.pnj).label+(e.zone?" · "+ZMAP[e.zone]?.name:""),color:(KINDS[e.kind]||KINDS.pnj).color});}
+  for(const z of ZONES){ if(S.player&&lvl(z.id)<3) continue; const st=S.zones[z.id]||{}; const hay=[z.name,st.desc,st.lore,S.player?"":st.secrets,RO()?"":st.links,S.pnotes["z_"+z.id]?.text].join(" ").toLowerCase(); if(hay.includes(s)) hits.push({t:"z",id:z.id,name:z.name,sub:"Zone",color:z.color});}
+  for(const e of Object.values(S.entities)){ if(S.player&&e.hiddenFromPlayers) continue; const hay=[e.name,e.desc,RO()?"":e.stats,S.player?"":e.notes,S.pnotes["e_"+e.id]?.text].join(" ").toLowerCase(); if(hay.includes(s)) hits.push({t:"e",id:e.id,name:e.name,sub:(KINDS[e.kind]||KINDS.pnj).label+(e.zone?" · "+ZMAP[e.zone]?.name:""),color:(KINDS[e.kind]||KINDS.pnj).color});}
   res.innerHTML=hits.length?hits.slice(0,30).map(h=>`<button type="button" data-t="${h.t}" data-id="${h.id}"><span class="swatch" style="background:${h.color}"></span>${esc(h.name)}<small>${esc(h.sub)}</small></button>`).join(""):`<button type="button" disabled>Aucun résultat</button>`;
   res.hidden=false;
   res.querySelectorAll("button[data-t]").forEach(b=>b.onclick=()=>{res.hidden=true; if(b.dataset.t==="z") selectZone(b.dataset.id); else openEntity(b.dataset.id);});
@@ -856,6 +867,35 @@ function makeAssets(){
   };
 }
 
+// ---------- Notes du groupe (modifiables par les joueurs) ----------
+const noteTimers={};
+function noteBlock(key,label,rows=4){
+  return `<div class="pnwrap"><div class="lbl"><span>✎ ${label}</span><span class="saved" data-nsaved="${key}"></span></div>
+    <textarea class="pnote" data-note="${key}" rows="${rows}" maxlength="5000" placeholder="${RO()?"Ce que le groupe a appris, soupçonne ou doit faire ici… (visible par tout le groupe et le MJ)":"Notes écrites par les joueurs (tu peux aussi les modifier)"}">${esc(S.pnotes[key]?.text||"")}</textarea></div>`;
+}
+function bindNotes(root){
+  root.querySelectorAll("textarea[data-note]").forEach(t=>t.oninput=()=>{
+    const key=t.dataset.note; S.pnotes[key]={text:t.value,at:Date.now(),_local:true};
+    const tag=root.querySelector(`[data-nsaved="${key}"]`); if(tag) tag.textContent="…";
+    clearTimeout(noteTimers[key]);
+    noteTimers[key]=setTimeout(async()=>{
+      try{ await db.doc("pnotes/"+key).set({text:t.value.slice(0,5000),at:Date.now()}); if(tag) tag.textContent="Enregistré"; setTimeout(()=>{ if(tag&&tag.textContent==="Enregistré") tag.textContent=""; },1500); }
+      catch(e){ if(tag) tag.textContent="Échec ("+(e.code||"erreur")+")"; }
+      finally{ if(S.pnotes[key]) delete S.pnotes[key]._local; }
+    },700);
+  });
+}
+function subNotes(onErr){
+  db.collection("pnotes").onSnapshot(snap=>{
+    const m={}; snap.docs.forEach(d=>m[d.id]=d.data()||{});
+    for(const [k,v] of Object.entries(S.pnotes)) if(v._local) m[k]=v;
+    S.pnotes=m;
+    document.querySelectorAll("textarea[data-note]").forEach(t=>{
+      if(t===document.activeElement||S.pnotes[t.dataset.note]?._local) return;
+      const v=S.pnotes[t.dataset.note]?.text||""; if(t.value!==v) t.value=v;
+    });
+  },onErr);
+}
 function subMoves(onErr,after){
   db.collection("moves").onSnapshot(snap=>{
     const m={}; snap.docs.forEach(d=>{ const v=d.data()||{}; if(typeof v.x==="number") m[d.id]=v; });
@@ -867,6 +907,7 @@ function startPlayer(){
   const onErr=e=>{ if(/identifiant MJ/.test($("#banner").textContent)) return; banner("Connexion perdue ("+(e.code||"erreur")+"). Recharge la page."); };
   db.collection("pubimg").onSnapshot(snap=>{ const m={}; snap.docs.forEach(d=>m[d.id]=d.data()?.data||""); S.images=m; render(); },onErr);
   subMoves(onErr);
+  subNotes(onErr);
   db.doc("pub/state").onSnapshot(d=>{
     const P=d.exists?(d.data()||{}):{};
     if(!d.exists) banner("Le MJ n'a pas encore ouvert la carte.");
@@ -879,7 +920,9 @@ function startPlayer(){
     S.world={intro:P.intro||""}; S.meta={session:P.session??10};
     $("#sessNum").value=S.meta.session;
     if(S.sel&&lvl(S.sel)<2) S.sel=null;
-    render();
+    const a=document.activeElement;
+    if(a&&a.matches?.("textarea[data-note]")&&a.closest("#pane")){ renderZones(); renderPassages(); renderTokens(); }
+    else render();
   },onErr);
 }
 
@@ -899,6 +942,7 @@ function startGM(){
   },onErr);
   sub("zones","zones"); sub("entities","entities"); sub("tokens","tokens");
   need.add("images"); need.add("pubimg");
+  subNotes(onErr);
   subMoves(onErr, ()=>{ // le MJ recopie les déplacements des joueurs dans ses jetons
     for(const [id,m] of Object.entries(S.moves)){ const t=S.tokens[id]; if(t&&t.kind==="joueur"&&(t.x!==m.x||t.y!==m.y)&&!(drag?.id===id)){ t.x=m.x; t.y=m.y; save("tokens/"+id,{...t},1500); } }
   });
