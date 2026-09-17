@@ -30,6 +30,7 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding-bloc
 .brand h1{font-family:var(--display);font-weight:400;font-size:26px;margin:0;letter-spacing:.02em}
 .brand .sess{font-family:var(--sc);color:var(--mute);letter-spacing:.08em;font-size:13px;display:flex;align-items:center;gap:6px}
 .brand .sess input{width:4.2em;background:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 6px;text-align:center;font-variant-numeric:tabular-nums}
+body.ro .tok.mv{cursor:grab}
 .role{font-family:var(--sc);font-size:12px;letter-spacing:.1em;padding:2px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mute)}
 .role.live{color:var(--infect);border-color:#f08a3c66}
 .role.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--infect);margin-right:6px;vertical-align:1px;animation:pulse 2s infinite}
@@ -220,22 +221,12 @@ dialog::backdrop{background:#000b}
 <script src="https://cdn.jsdelivr.net/npm/firebase@12.19.0/firebase-app-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/firebase@12.19.0/firebase-auth-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/firebase@12.19.0/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
 <script>
-// =====================================================================
-//  CONFIGURATION — à remplir (voir le guide)
-// =====================================================================
-// 1) Colle ici l'objet "firebaseConfig" donné par la console Firebase :
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyAhidgqjLfjMMVhG75aWeBghl-kywtGtWo",
-  authDomain: "fellive.firebaseapp.com",
-  projectId: "fellive",
-  storageBucket: "fellive.firebasestorage.app",
-  messagingSenderId: "28934355372",
-  appId: "1:28934355372:web:392dcee816b3da5b5da209"
-};
-// 2) Colle ici ton identifiant MJ (affiché sur la page après ta 1re connexion) :
-const GM_UID = "T6Ukvz0a2HXDn2fJeXa6jjbsj8m1";
-// =====================================================================
+// Configuration : voir config.js (fichier séparé, à ne pas écraser lors des mises à jour)
+const CFG = window.FELLIVE_CONFIG || {};
+const FIREBASE_CONFIG = CFG.firebase || {};
+const GM_UID = CFG.gmUid || "";
 
 // ---------- Zones (tracées sur ta carte) ----------
 const ZONES = [
@@ -311,7 +302,7 @@ const KINDS = {
 const STATUS = {vivant:"Vivant", mort:"Mort", inconnu:"Inconnu", allie:"Allié", hostile:"Hostile"};
 
 // ---------- État ----------
-const S = {zones:{}, entities:{}, tokens:{}, meta:{}, world:{}, opened:{}, known:{}, hid:{}, images:{}, passages:true, sel:null, selTok:null, tab:"zone",
+const S = {zones:{}, entities:{}, tokens:{}, meta:{}, world:{}, opened:{}, known:{}, hid:{}, images:{}, moves:{}, passages:true, sel:null, selTok:null, tab:"zone",
   player:false, labels:true, filterZone:"", filterKind:"", filterQ:""};
 let db=null, assets=null, user=null, BASE="";
 S.role="gm";           // "gm" (propriétaire) ou "player" (tous les autres, lecture seule)
@@ -350,7 +341,7 @@ function buildPub(){
   for(const e of Object.values(S.entities)){ if(e.hiddenFromPlayers) continue;
     entities[e.id]={name:e.name||"",kind:e.kind||"pnj",status:e.status||"inconnu",desc:e.desc||"",imageId:e.imageId||"",zone:e.zone&&lvl(e.zone)===3?e.zone:""}; }
   for(const t of Object.values(S.tokens)){ if(t.hidden) continue;
-    tokens[t.id]={x:t.x,y:t.y,kind:t.kind,label:t.label||"",entityId:t.entityId&&entities[t.entityId]?t.entityId:""}; }
+    tokens[t.id]={x:t.x,y:t.y,kind:t.kind,label:t.label||"",mv:t.kind==="joueur"&&t.mv!==false,entityId:t.entityId&&entities[t.entityId]?t.entityId:""}; }
   return {v:1,session:S.meta.session??10,intro:S.world.intro||"",zones,passages,entities,tokens};
 }
 function schedulePub(delay=500){
@@ -447,6 +438,15 @@ function tokenImage(t){
   const e=t.entityId&&S.entities[t.entityId];
   return e&&e.imageId?img(e.imageId):"";
 }
+const canMove = t=>!RO() || (t.kind==="joueur" && t.mv!==false);
+const pos = t=>(t.kind==="joueur" && S.moves[t.id]) ? S.moves[t.id] : t;
+let moveTimer=null;
+function sendMove(id,now){
+  const m=S.moves[id]; if(!m||!db) return;
+  clearTimeout(moveTimer);
+  const go=()=>db.doc("moves/"+id).set({x:m.x,y:m.y,at:m.at}).catch(e=>banner("Déplacement refusé ("+(e.code||"erreur")+")."));
+  if(now) go(); else moveTimer=setTimeout(go,300);
+}
 function renderTokens(){
   const g=$("#tokens"); g.innerHTML="";
   const list=Object.values(S.tokens).sort((a,b)=>(a.kind==="joueur")-(b.kind==="joueur"));
@@ -454,8 +454,9 @@ function renderTokens(){
     if(S.player && t.hidden) continue;
     const k=KINDS[t.kind]||KINDS.marqueur, r=t.kind==="boss"?30:24, src=tokenImage(t);
     const el=document.createElementNS(SVGNS,"g");
-    el.setAttribute("class","tok"+(S.selTok===t.id?" sel":"")+(t.hidden?" gm":""));
-    el.setAttribute("transform",`translate(${t.x},${t.y})`);
+    const P=pos(t);
+    el.setAttribute("class","tok"+(S.selTok===t.id?" sel":"")+(t.hidden?" gm":"")+(canMove(t)?" mv":""));
+    el.setAttribute("transform",`translate(${P.x},${P.y})`);
     el.dataset.tok=t.id;
     const ini=esc((t.label||"?").trim().slice(0,1).toUpperCase());
     el.innerHTML=`<circle r="${r}" fill="#0a0c11"/>`+
@@ -473,9 +474,10 @@ let drag=null;
 svg.addEventListener("pointerdown",e=>{
   const tok=e.target.closest(".tok");
   const p=pt(e);
-  if(tok&&!RO()){
-    const t=S.tokens[tok.dataset.tok]; if(!t) return;
-    drag={type:"tok",id:t.id,ox:p.x-t.x,oy:p.y-t.y,moved:false,el:tok};
+  const tt=tok&&S.tokens[tok.dataset.tok];
+  if(tt&&canMove(tt)){
+    const t=tt, P0=pos(t);
+    drag={type:"tok",id:t.id,ox:p.x-P0.x,oy:p.y-P0.y,moved:false,el:tok};
     tok.classList.add("drag");
   } else {
     drag={type:"pan",sx:e.clientX,sy:e.clientY,vb:{...VB},moved:false,zone:e.target.closest(".zone")?.dataset.zone,pass:e.target.closest(".pass")?.dataset.pass};
@@ -486,9 +488,10 @@ svg.addEventListener("pointermove",e=>{
   if(!drag) return;
   if(drag.type==="tok"){
     const p=pt(e), t=S.tokens[drag.id];
-    t.x=Math.round(p.x-drag.ox); t.y=Math.round(p.y-drag.oy); drag.moved=true;
-    drag.el.setAttribute("transform",`translate(${t.x},${t.y})`);
-    schedulePub(350);
+    const x=Math.round(p.x-drag.ox), y=Math.round(p.y-drag.oy); drag.moved=true;
+    if(t.kind==="joueur"){ S.moves[t.id]={x,y,at:Date.now()}; sendMove(t.id); }
+    if(!RO()){ t.x=x; t.y=y; schedulePub(350); }
+    drag.el.setAttribute("transform",`translate(${x},${y})`);
   } else {
     const dx=e.clientX-drag.sx, dy=e.clientY-drag.sy;
     if(Math.hypot(dx,dy)>4) drag.moved=true;
@@ -504,7 +507,7 @@ svg.addEventListener("pointerup",()=>{
   if(d.type==="tok"){
     d.el.classList.remove("drag");
     S.selTok=d.id;
-    if(d.moved){ const t=S.tokens[d.id]; save("tokens/"+t.id,{...t}); }
+    if(d.moved){ const t=S.tokens[d.id]; if(t.kind==="joueur") sendMove(t.id,true); if(!RO()) save("tokens/"+t.id,{...t}); }
     renderTokens(); if(S.tab==="tokens") renderPane();
   } else if(!d.moved){
     if(d.pass){ const p=PMAP[d.pass]; if(p.oneway&&!S.player) togglePass(d.pass); else if(!RO()||lvl(p.a)>=2) selectZone(p.a); } else if(d.zone){ if(!S.player||lvl(d.zone)>=2) selectZone(d.zone); } else { S.selTok=null; renderTokens(); }
@@ -610,7 +613,7 @@ function paneBank(p){
     <div class="filters">
       <input class="inp" id="fq" placeholder="Filtrer par nom" value="${esc(S.filterQ)}" style="flex:1 1 100%">
       <select id="fz">${zoneOptions(S.filterZone,true)}</select>
-      <select id="fk"><option value="">Tous types</option>${Object.entries(KINDS).filter(([k])=>k!=="joueur"&&k!=="marqueur").map(([k,v])=>`<option value="${k}"${k===S.filterKind?" selected":""}>${v.label}</option>`).join("")}</select>
+      <select id="fk"><option value="">Tous types</option>${Object.entries(KINDS).filter(([k])=>k!=="marqueur").map(([k,v])=>`<option value="${k}"${k===S.filterKind?" selected":""}>${v.label}</option>`).join("")}</select>
     </div>
     ${ents.length?`<div class="grid">${ents.map(entityCard).join("")}</div>`:`<p class="empty">${Object.keys(S.entities).length?"Aucune fiche ne correspond aux filtres.":(RO()?"Aucune rencontre pour l'instant.":"Ta banque est vide. Crée une fiche, ajoute l'image du PNJ ou de l'ennemi, puis rattache-la à sa zone.")}</p>`}`;
   const ae=$("#addEnt"); if(ae) ae.onclick=()=>openEntity(null,{zone:S.filterZone||S.sel||""});
@@ -621,24 +624,32 @@ function paneBank(p){
 }
 
 function paneTokens(p){
+  const joueurs=Object.values(S.entities).filter(e=>e.kind==="joueur");
   const toks=Object.values(S.tokens).sort((a,b)=>Object.keys(KINDS).indexOf(a.kind)-Object.keys(KINDS).indexOf(b.kind));
   p.innerHTML=`<div class="row">
-      <button type="button" class="btn" id="addPlayer">+ Joueur</button>
+      <button type="button" class="btn" id="addPlayer" title="Pose les fiches « Joueur » pas encore sur la carte, sinon un jeton générique">+ Joueurs</button>
       <button type="button" class="btn" id="addMark">+ Marqueur</button>
       <button type="button" class="btn" id="addFromBank">+ Depuis la banque</button>
     </div>
-    <p class="empty" style="margin:0">Glisse un jeton sur la carte pour le déplacer. Touche Suppr pour retirer le jeton sélectionné. L'œil barré = visible par le MJ seulement.</p>
+    <p class="empty" style="margin:0">Glisse un jeton pour le déplacer (Suppr pour le retirer). ◌ = visible par le MJ seulement. 🔓 = le joueur peut bouger son jeton lui-même.</p>
     ${toks.length?`<div class="list">${toks.map(t=>{const k=KINDS[t.kind]||KINDS.marqueur;const src=tokenImage(t);
       return `<div class="li${S.selTok===t.id?" sel":""}" data-t="${t.id}">
         <span class="dot" style="border:2px solid ${k.color};${src?`background-image:url('${src}')`:""}"></span>
         <input aria-label="Nom du jeton" value="${esc(t.label||"")}" ${t.entityId?"readonly":""}>
         <span class="chip" style="color:${k.color}">${k.label}</span>
+        ${t.kind==="joueur"?`<button type="button" data-act="lock" title="${t.mv!==false?"Le joueur peut déplacer ce jeton — cliquer pour verrouiller":"Verrouillé — cliquer pour laisser le joueur le déplacer"}">${t.mv!==false?"🔓":"🔒"}</button>`:""}
         <button type="button" data-act="hide" title="${t.hidden?"Rendre visible aux joueurs":"Cacher aux joueurs"}">${t.hidden?"◌":"◉"}</button>
         <button type="button" data-act="find" title="Centrer la carte">⌖</button>
         <button type="button" data-act="del" title="Retirer">✕</button>
-      </div>`}).join("")}</div>`:`<p class="empty">Aucun jeton sur la carte.</p>`}
+      </div>${t.kind==="joueur"&&!t.entityId&&joueurs.length?`<select class="inp" data-link="${t.id}" style="margin:-2px 0 4px 40px;width:calc(100% - 40px);padding:4px 8px;font-size:13px"><option value="">Lier à une fiche joueur (pour l'image)…</option>${joueurs.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}</select>`:""}`}).join("")}</div>`:`<p class="empty">Aucun jeton sur la carte.</p>`}
     ${toks.length?`<hr><button type="button" class="btn warn" id="clearEnemies">Retirer tous les jetons ennemis/boss</button>`:""}`;
-  $("#addPlayer").onclick=()=>{const n=Object.values(S.tokens).filter(t=>t.kind==="joueur").length+1; addToken({kind:"joueur",label:"Joueur "+n});};
+  $("#addPlayer").onclick=()=>{
+    const placed=new Set(Object.values(S.tokens).map(t=>t.entityId).filter(Boolean));
+    const todo=joueurs.filter(e=>!placed.has(e.id));
+    if(todo.length){ todo.forEach(e=>addToken({kind:"joueur",label:e.name,entityId:e.id,mv:true})); return; }
+    const n=Object.values(S.tokens).filter(t=>t.kind==="joueur").length+1; addToken({kind:"joueur",label:"Joueur "+n,mv:true});
+  };
+  p.querySelectorAll("[data-link]").forEach(sel=>sel.onchange=()=>{ const t=S.tokens[sel.dataset.link], e=S.entities[sel.value]; if(!t||!e) return; t.entityId=e.id; t.label=e.name; save("tokens/"+t.id,{...t}); render(); });
   $("#addMark").onclick=()=>addToken({kind:"marqueur",label:"Point d'intérêt",hidden:true});
   $("#addFromBank").onclick=()=>{S.tab="bank";syncTabs();renderPane();};
   const ce=$("#clearEnemies"); if(ce) ce.onclick=()=>{Object.values(S.tokens).filter(t=>t.kind==="ennemi"||t.kind==="boss").forEach(t=>delToken(t.id,true)); render();};
@@ -649,6 +660,7 @@ function paneTokens(p){
     row.onclick=e=>{ if(e.target.closest("button")) return; S.selTok=t.id; renderTokens(); row.parentNode.querySelectorAll(".li").forEach(r=>r.classList.toggle("sel",r===row)); };
     row.querySelector('[data-act="hide"]').onclick=()=>{t.hidden=!t.hidden; save("tokens/"+t.id,{...t}); render();};
     row.querySelector('[data-act="del"]').onclick=()=>delToken(t.id);
+    const lk=row.querySelector('[data-act="lock"]'); if(lk) lk.onclick=()=>{t.mv=t.mv===false; save("tokens/"+t.id,{...t}); renderPane();};
     row.querySelector('[data-act="find"]').onclick=()=>{S.selTok=t.id; VB={x:t.x-350,y:t.y-285,w:700,h:570}; setVB(); render();};
   });
 }
@@ -660,7 +672,7 @@ function addToken(o){
   delete t.zone;
   S.tokens[t.id]=t; S.selTok=t.id; save("tokens/"+t.id,{...t}); render();
 }
-function delToken(id,quiet){ delete S.tokens[id]; if(S.selTok===id) S.selTok=null; remove("tokens/"+id); if(!quiet) render(); }
+function delToken(id,quiet){ if(S.tokens[id]?.kind==="joueur"&&db&&!RO()) db.doc("moves/"+id).delete().catch(()=>{}); delete S.moves[id]; delete S.tokens[id]; if(S.selTok===id) S.selTok=null; remove("tokens/"+id); if(!quiet) render(); }
 function bindCards(p){ p.querySelectorAll("[data-ent]").forEach(b=>b.onclick=()=>openEntity(b.dataset.ent)); }
 
 // ---------- Fiche PNJ / ennemi ----------
@@ -695,7 +707,7 @@ function openEntity(id,defaults={}){
       <div style="display:flex;flex-direction:column;gap:8px">
         <div><div class="lbl">Nom</div><input class="inp" id="e_name" value="${esc(e.name)}" placeholder="ex. Le Tisseur de Mousse" required></div>
         <div class="two">
-          <div><div class="lbl">Type</div><select id="e_kind">${Object.entries(KINDS).filter(([k])=>k!=="joueur"&&k!=="marqueur").map(([k,v])=>`<option value="${k}"${k===e.kind?" selected":""}>${v.label}</option>`).join("")}</select></div>
+          <div><div class="lbl">Type</div><select id="e_kind">${Object.entries(KINDS).filter(([k])=>k!=="marqueur").map(([k,v])=>`<option value="${k}"${k===e.kind?" selected":""}>${v.label}</option>`).join("")}</select></div>
           <div><div class="lbl">Statut</div><select id="e_status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}"${k===e.status?" selected":""}>${v}</option>`).join("")}</select></div>
         </div>
         <div><div class="lbl">Zone</div><select id="e_zone">${zoneOptions(e.zone)}</select></div>
@@ -721,7 +733,7 @@ function openEntity(id,defaults={}){
   const commit=()=>{ collect(); if(!e.name) e.name="Sans nom"; S.entities[e.id]={...e}; save("entities/"+e.id,{...e}); refreshTokensLabels(e); };
   form.onsubmit=ev=>{ ev.preventDefault(); commit(); dlg.close(); render(); };
   $("#e_cancel").onclick=()=>dlg.close();
-  $("#e_place").onclick=()=>{ commit(); dlg.close(); addToken({kind:e.kind,label:e.name,entityId:e.id,zone:e.zone,hidden:e.kind!=="pnj"}); S.tab="tokens"; syncTabs(); renderPane(); };
+  $("#e_place").onclick=()=>{ commit(); dlg.close(); addToken({kind:e.kind,label:e.name,entityId:e.id,zone:e.zone,hidden:!["pnj","joueur"].includes(e.kind), mv:e.kind==="joueur"?true:undefined}); S.tab="tokens"; syncTabs(); renderPane(); };
   const del=$("#e_del"); if(del) del.onclick=async()=>{
     if(del.dataset.confirm!=="1"){ del.dataset.confirm="1"; del.textContent="Confirmer la suppression"; return; }
     const imgId=e.imageId;
@@ -786,7 +798,7 @@ function applyRole(){
   $("#roleTag").textContent=ro?"Vue joueurs · en direct":"MJ";
   $("#roleTag").classList.toggle("live",ro);
   document.querySelector(".hint").textContent=ro
-    ? "Clic : ouvrir une zone connue · glisser : déplacer la vue · molette : zoom"
+    ? "Glisse ton jeton pour le déplacer · clic : ouvrir une zone connue · molette : zoom"
     : "Clic : ouvrir une zone · clic sur un ⊥ : l'ouvrir/le refermer · glisser le fond : déplacer · molette : zoom · glisser un jeton : le déplacer";
   if(ro){ S.player=true; if(S.tab==="tokens") S.tab="zone"; syncTabs(); }
 }
@@ -844,9 +856,17 @@ function makeAssets(){
   };
 }
 
+function subMoves(onErr,after){
+  db.collection("moves").onSnapshot(snap=>{
+    const m={}; snap.docs.forEach(d=>{ const v=d.data()||{}; if(typeof v.x==="number") m[d.id]=v; });
+    if(drag?.type==="tok"&&S.moves[drag.id]) m[drag.id]=S.moves[drag.id];
+    S.moves=m; after&&after(); renderTokens();
+  },onErr);
+}
 function startPlayer(){
-  const onErr=e=>banner("Connexion perdue ("+(e.code||"erreur")+"). Recharge la page.");
+  const onErr=e=>{ if(/identifiant MJ/.test($("#banner").textContent)) return; banner("Connexion perdue ("+(e.code||"erreur")+"). Recharge la page."); };
   db.collection("pubimg").onSnapshot(snap=>{ const m={}; snap.docs.forEach(d=>m[d.id]=d.data()?.data||""); S.images=m; render(); },onErr);
+  subMoves(onErr);
   db.doc("pub/state").onSnapshot(d=>{
     const P=d.exists?(d.data()||{}):{};
     if(!d.exists) banner("Le MJ n'a pas encore ouvert la carte.");
@@ -879,6 +899,9 @@ function startGM(){
   },onErr);
   sub("zones","zones"); sub("entities","entities"); sub("tokens","tokens");
   need.add("images"); need.add("pubimg");
+  subMoves(onErr, ()=>{ // le MJ recopie les déplacements des joueurs dans ses jetons
+    for(const [id,m] of Object.entries(S.moves)){ const t=S.tokens[id]; if(t&&t.kind==="joueur"&&(t.x!==m.x||t.y!==m.y)&&!(drag?.id===id)){ t.x=m.x; t.y=m.y; save("tokens/"+id,{...t},1500); } }
+  });
   db.collection(P_("images")).onSnapshot(snap=>{ const m={}; snap.docs.forEach(d=>m[d.id]=d.data()?.data||""); S.images=m; ready("images"); render(); schedulePub(); },onErr);
   db.collection("pubimg").get().then(snap=>{ snap.docs.forEach(d=>pubImgs.add(d.id)); ready("pubimg"); }).catch(()=>ready("pubimg"));
   db.collection(P_("passages")).onSnapshot(snap=>{
@@ -914,7 +937,7 @@ function showLogin(u){
 (function boot(){
   if(!window.firebase || !FIREBASE_CONFIG.apiKey){
     applyRole();
-    banner(window.firebase ? "Configuration Firebase manquante : colle ton firebaseConfig en haut du fichier (voir le guide). Mode aperçu, rien n'est enregistré."
+    banner(window.firebase ? "Configuration manquante : vérifie que config.js est bien à côté de index.html et rempli (voir le guide). Mode aperçu, rien n'est enregistré."
                            : "Impossible de charger Firebase (connexion internet ?). Mode aperçu, rien n'est enregistré.");
     return;
   }
@@ -934,7 +957,7 @@ function showLogin(u){
     S.role = isGM ? "gm" : "player";
     applyRole(); render();
     if(u && !GM_UID){
-      banner("Ton identifiant MJ : "+u.uid+" — copie-le dans GM_UID (en haut de index.html) et dans les règles Firestore, puis recharge.");
+      banner("Ton identifiant MJ : "+u.uid+" — copie-le dans gmUid (config.js) et dans les règles Firestore, puis recharge.");
     } else if(u && !isGM){
       banner("Ce compte n'est pas celui du MJ : tu vois la vue joueurs.");
     }
